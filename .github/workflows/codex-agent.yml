@@ -1,0 +1,59 @@
+name: Codex agent - TODO/FIXME report
+
+# Runs a coding agent (OpenAI Codex CLI) against a fixed prompt.
+# Trigger manually from the Actions tab ("Run workflow").
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run Codex with the fixed prompt
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # Read files in the workspace; no network, no writes outside it.
+          permission-profile: ":workspace"
+          output-file: codex-report.md
+          prompt: |
+            You are reviewing the Plane repository (an open-source project management tool).
+
+            Task: find the TODO and FIXME comments in the source code and report the most important ones.
+
+            Rules:
+            - Do not modify, create or delete any files in the repository.
+            - Ignore node_modules, build output, lock files, and vendored or generated code.
+            - Group findings by top-level app or package (for example apps/api, apps/web, packages/...).
+
+            Output (Markdown):
+            1. A one-paragraph summary with the total count of TODO and FIXME comments per app/package.
+            2. A table of the 15 most important items with columns: Priority (High/Medium/Low), File:Line, Comment (short), Why it matters (one sentence).
+            3. A short "Suggested next steps" list (3-5 bullets).
+
+      - name: Publish the report to the run summary
+        if: always()
+        run: |
+          if [ -f codex-report.md ]; then
+            cat codex-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Codex produced no report file." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-report
+          path: codex-report.md
+          if-no-files-found: warn
