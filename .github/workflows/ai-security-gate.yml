@@ -1,0 +1,97 @@
+name: AI security gate
+
+# Fails the build when a coding agent (OpenAI Codex) finds a security problem
+# in the changes on the selected branch compared with preview.
+# Run manually: gh workflow run ai-security-gate.yml --ref <branch>
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Collect the changes compared with preview
+        id: diff
+        run: |
+          mkdir -p .ai-gate
+          git diff origin/preview...HEAD > .ai-gate/changes.diff
+          lines=$(wc -l < .ai-gate/changes.diff)
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "Changed lines in diff: $lines"
+
+      - name: Run Codex security review
+        if: steps.diff.outputs.lines != '0'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":workspace"
+          output-file: .ai-gate/verdict.json
+          output-schema: |
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verdict", "summary", "findings"],
+              "properties": {
+                "verdict": { "type": "string", "enum": ["pass", "fail"] },
+                "summary": { "type": "string" },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["file", "line", "issue"],
+                    "properties": {
+                      "file": { "type": "string" },
+                      "line": { "type": "integer" },
+                      "issue": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          prompt: |
+            You are a security gate for a pull-request-style change.
+
+            Review ONLY the changes in the file .ai-gate/changes.diff (a git diff against the preview branch).
+            You may open files in the repository to understand context. Do not modify any files.
+
+            Return verdict "fail" if the changes do any of the following:
+            - add a hardcoded secret (API key, password, token, private key, credentials in a URL)
+            - remove or weaken an authentication or permission check
+            - log or expose sensitive data (passwords, tokens, personal data)
+
+            Otherwise return verdict "pass" with an empty findings list.
+            For each finding give the repo-relative file path, the line number in the new version, and a one-sentence issue.
+
+      - name: Pass or fail the build
+        if: always()
+        run: |
+          if [ "${{ steps.diff.outputs.lines }}" = "0" ]; then
+            echo "## ✅ AI security gate: pass" >> "$GITHUB_STEP_SUMMARY"
+            echo "No changes compared with preview." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ ! -s .ai-gate/verdict.json ]; then
+            echo "## ❌ AI security gate: no verdict produced" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          verdict=$(jq -r .verdict .ai-gate/verdict.json)
+          {
+            if [ "$verdict" = "pass" ]; then echo "## ✅ AI security gate: pass"; else echo "## ❌ AI security gate: fail"; fi
+            echo
+            jq -r .summary .ai-gate/verdict.json
+            echo
+            jq -r '.findings[] | "- `\(.file):\(.line)` — \(.issue)"' .ai-gate/verdict.json
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat .ai-gate/verdict.json
+          [ "$verdict" = "pass" ]
