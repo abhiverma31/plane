@@ -35,6 +35,9 @@ jobs:
             - Do not modify, create or delete any files in the repository.
             - Ignore node_modules, build output, lock files, and vendored or generated code.
             - Group findings by top-level app or package (for example apps/api, apps/web, packages/...).
+            - Always write file paths relative to the repository root (for example apps/api/plane/db/models/issue.py), never absolute paths.
+            - In the File:Line column, link each item to GitHub as
+              [<path>:<line>](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/<path>#L<line>)
 
             Output (Markdown):
             1. A one-paragraph summary with the total count of TODO and FIXME comments per app/package.
